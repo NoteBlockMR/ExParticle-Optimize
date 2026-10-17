@@ -2,6 +2,7 @@ package net.hackermdch.exparticle.util;
 
 import com.google.common.collect.Queues;
 import net.hackermdch.exparticle.ExParticle;
+import net.hackermdch.exparticle.ExParticleConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.particle.Particle;
 import net.minecraft.core.particles.ParticleOptions;
@@ -20,8 +21,14 @@ public class ParticleUtil {
     private static final Queue<TimerTask> TICK_START_TASKS = Queues.newArrayDeque();
     private static final Queue<TimerTask> TICK_END_TASKS = Queues.newArrayDeque();
     public static final Minecraft CLIENT = Minecraft.getInstance();
+    /** Reset on the client thread before ExParticle schedules this tick's work. */
+    private static int particlesSpawnedThisTick;
+    private static long clientTick;
 
     public static Particle spawnParticle(ParticleOptions effect, double x, double y, double z, double cx, double cy, double cz, float red, float green, float blue, float alpha, double vx, double vy, double vz, int age, String expression, double step, String group) {
+        if (!tryReserveParticle()) {
+            return null;
+        }
         try {
             var particle = CLIENT.particleEngine.createParticle(effect, x, y, z, vx, vy, vz);
             if (particle != null) {
@@ -204,11 +211,34 @@ public class ParticleUtil {
     }
 
     public static void onStartClientTick(ClientTickEvent.Pre ignore) {
+        particlesSpawnedThisTick = 0;
+        clientTick++;
+        int cleanupInterval = ExParticleConfig.config.groupCleanupIntervalTicks;
+        if (cleanupInterval > 0 && clientTick % cleanupInterval == 0) {
+            GroupUtil.pruneDead();
+        }
         synchronized (TICK_START_TASKS) {
             while (!TICK_START_TASKS.isEmpty()) {
                 TICK_START_TASKS.poll().run();
             }
         }
+    }
+
+    /**
+     * Keep command bursts bounded.  ExParticle evaluates a parameter command
+     * client-side, so without this guard a dense music chord can create tens
+     * of thousands of particles in one tick and make later ticks unusable.
+     */
+    private static boolean tryReserveParticle() {
+        int limit = ExParticleConfig.config.maxParticlesPerTick;
+        if (limit <= 0) {
+            return true;
+        }
+        if (particlesSpawnedThisTick >= limit) {
+            return false;
+        }
+        particlesSpawnedThisTick++;
+        return true;
     }
 
     public static void onEndClientTick(ClientTickEvent.Post ignore) {
@@ -396,7 +426,7 @@ public class ParticleUtil {
                 var alive = false;
                 for (int row = 0; row < dh; ++row) {
                     for (int col = 0; col < dw; ++col) {
-                        if (particles[row][col].isAlive()) {
+                        if (particles[row][col] != null && particles[row][col].isAlive()) {
                             int pixel = result.getRGB(col, row);
                             float red = (float) ((pixel & 0xff0000) >>> 16) / 255.0F;
                             float green = (float) ((pixel & 0xff00) >>> 8) / 255.0F;

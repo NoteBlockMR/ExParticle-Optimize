@@ -20,10 +20,23 @@ public class GroupUtil {
         if (group != null && !group.equals("null")) {
             String[] groups = group.split("\\|");
             for (String str : groups) {
-                if (!GROUPS.containsKey(str)) {
-                    GROUPS.put(str, Lists.newArrayList());
-                }
-                GROUPS.get(str).add(particle);
+                GROUPS.computeIfAbsent(str, ignored -> Lists.newArrayList()).add(particle);
+            }
+        }
+    }
+
+    /**
+     * Drop expired particle references while preserving all live particles in
+     * the group.  Without this, a long-running music group retains every
+     * particle ever created and its list becomes a client-side memory log.
+     */
+    public static void pruneDead() {
+        var iterator = GROUPS.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            entry.getValue().removeIf(particle -> !particle.isAlive());
+            if (entry.getValue().isEmpty()) {
+                iterator.remove();
             }
         }
     }

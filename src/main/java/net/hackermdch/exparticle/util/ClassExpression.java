@@ -1,14 +1,23 @@
 package net.hackermdch.exparticle.util;
 
-import com.google.common.collect.Maps;
+import net.hackermdch.exparticle.ExParticleConfig;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class ClassExpression implements IExecutable, ICacheAble {
-    private static final Map<String, ClassExpression> CACHE = Maps.newHashMap();
+    /**
+     * This cache used to be an unbounded HashMap.  Particle music commonly
+     * bakes a different velocity/position into every cube command, which made
+     * it retain every generated expression class until Minecraft was closed.
+     * Access-order LRU keeps recent repeated expressions fast without letting
+     * a long song turn the cache into a memory and GC leak.
+     */
+    private static final Map<String, ClassExpression> CACHE = new LinkedHashMap<>(256, 0.75F, true);
     private final ParticleStruct struct = new ParticleStruct();
     private final MethodHandle method;
     private boolean invalid;
@@ -32,7 +41,7 @@ public class ClassExpression implements IExecutable, ICacheAble {
         invalid = other.invalid;
     }
 
-    public static void clear() {
+    public static synchronized void clear() {
         CACHE.clear();
     }
 
@@ -44,15 +53,30 @@ public class ClassExpression implements IExecutable, ICacheAble {
     private static ClassExpression create(String expression) {
         var instance = new ClassExpression(expression);
         CACHE.put(expression, instance);
+        trimCache();
         return instance;
     }
 
-    public static ClassExpression parse(String expression) {
-        if (CACHE.containsKey(expression)) {
-            var c = CACHE.get(expression);
+    public static synchronized ClassExpression parse(String expression) {
+        var c = CACHE.get(expression);
+        if (c != null) {
             if (c.invalid) return create(expression);
             return new ClassExpression(c);
-        } else return create(expression);
+        }
+        return create(expression);
+    }
+
+    private static void trimCache() {
+        int limit = ExParticleConfig.config.maxExpressionCacheEntries;
+        if (limit <= 0) {
+            CACHE.clear();
+            return;
+        }
+        while (CACHE.size() > limit) {
+            Iterator<String> iterator = CACHE.keySet().iterator();
+            iterator.next();
+            iterator.remove();
+        }
     }
 
     @Override
